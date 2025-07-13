@@ -1,4 +1,4 @@
-interface IdentifyRequest{
+export interface IdentifyRequest{
     email?:string,
     phoneNumber?:string
 }
