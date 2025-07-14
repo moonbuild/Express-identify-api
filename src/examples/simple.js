@@ -5,7 +5,7 @@ fetch('http://localhost:3000/identify', {
     },
     body: JSON.stringify({
         phoneNumber: null,
-        email:'m4@gmail.com'
+        email:'a1@example.com'
     })
 })
 .then(res=>res.json())
