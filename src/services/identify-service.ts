@@ -39,11 +39,104 @@ export class IdentifyService {
       return conflictResultSuccess;
     }
 
-    // else we create response with allLinked
+    // else we create response with allPrimaryRelatedContacts
     return this.createResponse(allPrimaryRelatedContacts);
   }
 
-  // This function handles edge cases when creating contact
+  //    Find all contacts that have either phoneNumber or email in common
+  async findSimilarContacts({ email, phoneNumber }: IdentifyRequest): Promise<ContactData[]> {
+    const contacts = await prisma.contacts.findMany({
+      where: {
+        OR: [{ phoneNumber }, { email }],
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    return contacts;
+  }
+
+  //    Find all contacts that are Primary or linked to it
+  async findPrimaryRelatedContacts(contacts: ContactData[]): Promise<ContactData[]> {
+    const primaryContactIds = new Set<number>();
+
+    // There are two cases 1. linkPrecendence = 'primary' or 2. linkedId has a primaryId
+    contacts.forEach((contact) => {
+      if (contact.linkPrecedence === 'primary') {
+        primaryContactIds.add(contact.id);
+      } else if (contact.linkedId) {
+        primaryContactIds.add(contact.linkedId);
+      }
+    });
+
+    // using the stored primaryContactIds we fetch them using the in operator
+    const allRelatedContacts = await prisma.contacts.findMany({
+      where: {
+        OR: [
+          { id: { in: Array.from(primaryContactIds) } },
+          { linkedId: { in: Array.from(primaryContactIds) } },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    return allRelatedContacts;
+  }
+
+  //    Function to validate the request for further logic
+  async shouldCreateNewContact(
+    contacts: ContactData[],
+    { email, phoneNumber }: IdentifyRequest,
+  ): Promise<boolean> {
+    // checks if request contact already exists
+    const alreadyExists = contacts.find((c) => c.email === email && c.phoneNumber === phoneNumber);
+    if (alreadyExists) return false;
+
+    // checks if there is a new email or a new phone number
+    const isNewEmail = !!email && !contacts.some((c) => c.email === email);
+    const isNewPhonenumber = !!phoneNumber && !contacts.some((c) => c.phoneNumber === phoneNumber);
+
+    //if atleast one of the request is true, we create a contact
+    return isNewEmail || isNewPhonenumber;
+  }
+
+  //    Create a primary contact
+  async createPrimaryContact({ email, phoneNumber }: IdentifyRequest) {
+    const newContact = await prisma.contacts.create({
+      data: {
+        email: email ?? null,
+        phoneNumber: phoneNumber ?? null,
+        linkPrecedence: 'primary',
+      },
+    });
+    return this.createResponse([newContact]);
+  }
+
+  //    Create a secondary contact
+  async createSecondaryContact({ email, phoneNumber }: IdentifyRequest, primaryContactId: number) {
+    await prisma.contacts.create({
+      data: {
+        email: email ?? null,
+        phoneNumber: phoneNumber ?? null,
+        linkedId: primaryContactId,
+        linkPrecedence: 'secondary',
+      },
+    });
+  }
+
+  //    Identify the primary contact or the oldest
+  private findPrimaryContact(contacts: ContactData[]): ContactData {
+    return contacts.find((c) => c.linkPrecedence === 'primary') ?? contacts[0];
+  }
+
+  //    Sort the array, by prioritizing the value that comes from primary contact
+  private sortWithPrimaryFirst<T>(array: T[], primaryValue: T | null): T[] {
+    // edge cases for when primary vlaue is null or is not included in array
+    if (!primaryValue || !array.includes(primaryValue)) {
+      return array;
+    }
+    // first primaryValue then arrayValues
+    return [primaryValue, ...array.filter((item) => item !== primaryValue)];
+  }
+
+  //    This function handles edge cases when creating contact
   private async handleConflict(
     contacts: ContactData[],
     { email, phoneNumber }: IdentifyRequest,
@@ -97,100 +190,7 @@ export class IdentifyService {
     return null;
   }
 
-  // Find all contacts that have either phoneNumber or email in common
-  async findSimilarContacts({ email, phoneNumber }: IdentifyRequest): Promise<ContactData[]> {
-    const contacts = await prisma.contacts.findMany({
-      where: {
-        OR: [{ phoneNumber }, { email }],
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-    return contacts;
-  }
-
-  // Find all contacts that are Primary or linked to it
-  async findPrimaryRelatedContacts(contacts: ContactData[]): Promise<ContactData[]> {
-    const primaryContactIds = new Set<number>();
-
-    // There are two cases 1. linkPrecendence = 'primary' or 2. linkedId has a primaryId
-    contacts.forEach((contact) => {
-      if (contact.linkPrecedence === 'primary') {
-        primaryContactIds.add(contact.id);
-      } else if (contact.linkedId) {
-        primaryContactIds.add(contact.linkedId);
-      }
-    });
-
-    // using the stored primaryContactIds we fetch them using the in operator
-    const allRelatedContacts = await prisma.contacts.findMany({
-      where: {
-        OR: [
-          { id: { in: Array.from(primaryContactIds) } },
-          { linkedId: { in: Array.from(primaryContactIds) } },
-        ],
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-    return allRelatedContacts;
-  }
-
-  // Function to validate the request for further logic
-  async shouldCreateNewContact(
-    contacts: ContactData[],
-    { email, phoneNumber }: IdentifyRequest,
-  ): Promise<boolean> {
-    // checks if request contact already exists
-    const alreadyExists = contacts.find((c) => c.email === email && c.phoneNumber === phoneNumber);
-    if (alreadyExists) return false;
-
-    // checks if there is a new email or a new phone number
-    const isNewEmail = !!email && !contacts.some((c) => c.email === email);
-    const isNewPhonenumber = !!phoneNumber && !contacts.some((c) => c.phoneNumber === phoneNumber);
-
-    //if atleast one of the request is true, we create a contact
-    return isNewEmail || isNewPhonenumber;
-  }
-
-  // This is simple function to create a primary contact
-  async createPrimaryContact({ email, phoneNumber }: IdentifyRequest) {
-    const newContact = await prisma.contacts.create({
-      data: {
-        email: email ?? null,
-        phoneNumber: phoneNumber ?? null,
-        linkPrecedence: 'primary',
-      },
-    });
-    return this.createResponse([newContact]);
-  }
-
-  // This is simple function to create a secondary contact
-  async createSecondaryContact({ email, phoneNumber }: IdentifyRequest, primaryContactId: number) {
-    await prisma.contacts.create({
-      data: {
-        email: email ?? null,
-        phoneNumber: phoneNumber ?? null,
-        linkedId: primaryContactId,
-        linkPrecedence: 'secondary',
-      },
-    });
-  }
-
-  // This is a simple function to identify the primary contact or the oldest
-  private findPrimaryContact(contacts: ContactData[]): ContactData {
-    return contacts.find((c) => c.linkPrecedence === 'primary') ?? contacts[0];
-  }
-
-  //   sort the array, by prioritizing the value that comes from primary contact
-  private sortWithPrimaryFirst<T>(array: T[], primaryValue: T | null): T[] {
-    // edge cases for when primary vlaue is null or is not included in array
-    if (!primaryValue || !array.includes(primaryValue)) {
-      return array;
-    }
-    // first primaryValue then arrayValues
-    return [primaryValue, ...array.filter((item) => item !== primaryValue)];
-  }
-
-  //   This function is used to create the correct response to a contacts array
+  //    This function is used to create the correct response to a contacts array
   async createResponse(contacts: ContactData[]): Promise<IdentifyResponse> {
     // seperate contacts array into primary and secondary contacts
     const primary = this.findPrimaryContact(contacts);
@@ -205,8 +205,6 @@ export class IdentifyService {
     // We want the emails and phonenumbers to show the primaryValue first
     const sortedEmails = this.sortWithPrimaryFirst(emails, primary.email);
     const sortedPhoneNumbers = this.sortWithPrimaryFirst(phoneNumbers, primary.phoneNumber);
-
-    console.log(emails, phoneNumbers, sortedEmails, sortedPhoneNumbers);
 
     return {
       contact: {
